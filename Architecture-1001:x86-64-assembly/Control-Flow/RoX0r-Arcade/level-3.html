@@ -1,0 +1,440 @@
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <script type="text/javascript"
+        src="https://cdn.jsdelivr.net/npm/brython@3/brython.js">
+    </script>
+    <script type="text/javascript"
+        src="https://cdn.jsdelivr.net/npm/brython@3/brython_stdlib.js">
+    </script>
+</head>
+
+<body onload="brython()">
+
+<style>
+*{
+    font-family: sans-serif;
+    font-family: Monaco, monospace;
+    font-weight: normal;
+    font-size: 20px;
+}
+td{
+    background-color: #ccc;
+    padding: 10px 30px 10px 30px;
+    border-radius: 0.2em;
+    text-align: left;
+    cursor: default;
+    font-family: sans-serif;
+    font-size: 20px;
+}
+#userInput{
+    border-color: #000;
+    border-width: 1px;
+    border-style: solid;
+    padding: 10px 30px 10px 30px;
+    text-align: right;
+    font-size: 20px;
+}
+#theirResult{
+    border-color: #000;
+    background-color: #FF0;
+    border-width: 1px;
+    border-style: solid;
+    padding: 10px 30px 10px 30px;
+    text-align: left;
+    font-family: Monaco, monospace;
+    font-weight: normal;
+    font-size: 20px;
+}
+#theirScore{
+    border-color: #000;
+    border-width: 1px;
+    border-style: solid;
+    padding: 10px 30px 10px 30px;
+    text-align: left;
+    font-size: 20px;
+}
+#randAsm{
+    border-color: #000;
+    border-width: 1px;
+    border-style: solid;
+    font-family: Monaco, monospace;
+    font-weight: normal;
+    font-size: 20px;
+    padding: 10px 30px 10px 30px;
+    text-align: left;
+}
+</style>
+<p id='topzone'> </p>
+<script type="text/python">
+
+from browser import document, html, alert
+import random, time, itertools
+
+currentScore = 0
+gAnswer = 0
+gTemplateIndex = 0
+gDict = {'hi':"mom"}
+gTFList = []
+gMnemonic = ""
+
+# Interpolation conventions:
+# rX and rY = two randomly selected registers (from the set of all general purpose registers) which cannot both be the same
+# i8 = randomly selected 8 bit integer in the range (0x0 - 0xFF)
+# ni8 = same number as i8 but made negative and signed extended to 64 bits (so i8+ni8 == 0)
+# nzi8 = randomly selected non-zero 8 bit integer in the range (0x1 - 0xFF)
+# ltnzi8 = randomly selected 8 bit integer that must be less than nzi8
+# ni8 = same number as i8 but made negative and signed extended to 64 bits (so i8+ni8 == 0)
+# i16 = randomly selected 16 bit integer in the range (0x0 - 0xFFFF)
+# ni16 = same number as i16 but made negative and signed extended to 64 bits (so i16+ni16 == 0)
+# nzi16 = randomly selected 16 bit integer in the range (0x1 - 0xFFFF)
+# ltnzi16 = randomly selected 16 bit integer that must be less than nzi16
+# i32 = randomly selected 32 bit integer in the range (0x0 - 0xFFFFFFFF)
+# ni32 = same number as i32 but made negative and signed extended to 64 bits (so i32+ni32 == 0)
+# nzi32 = randomly selected 32 bit integer in the range (0x1 - 0xFFFFFFFF)
+# ltnzi32 = randomly selected 32 bit integer that must be less than nzi32
+# nznsi32 = randomly selected 64 bit integer in the range (0x1 - 0x7FFFFFFF)
+# ltnznsi32 = randomly selected 64 bit integer that must be less than nznsi32
+# i64 = randomly selected 64 bit integer in the range (0x0 - 0xFFFFFFFFFFFFFFFF)
+# i64_2 = randomly selected 64 bit integer in the range (0x0 - 0xFFFFFFFFFFFFFFFF)
+# nzi64 = randomly selected 64 bit integer in the range (0x1 - 0xFFFFFFFFFFFFFFFF)
+# ltnz64 = randomly selected 64 bit integer that must be less than nzi64
+# nznsi64 = randomly selected 64 bit integer in the range (0x1 - 0x7FFFFFFFFFFFFFFF)
+# ltnznsi64 = randomly selected 64 bit integer that must be less than nznsi64
+
+gRegs64 = ["rax","rbx","rcx","rdx","rdi","rsi","rbp","rsp","r8","r9","r10","r11","r12","r13","r14","r15"]
+gRegs32 = ["eax","ebx","ecx","edx","edi","esi","ebp","esp","r8d","r9d","r10d","r11d","r12d","r13d","r14d","r15d"]
+gRegs16 = ["ax","bx","cx","dx","di","si","bp","sp","r8w","r9w","r10w","r11w","r12w","r13w","r14w","r15w"]
+gRegs8  = ["al","bl","cl","dl","dil","sil","bpl","spl","r8b","r9b","r10b","r11b","r12b","r13b","r14b","r15b"]
+
+# Level 3 - assembly instructions we can use: mov, add, sub, movsx, movzx, imul, lea,
+#                                             cmp, jmp, jz/je, jnz/jne, 
+#                                             ja/jnbe, jna/jbe, jb/jnae, jnb/jae
+#                                             jg/jnle, jng/jle, jl/jnge, jnl/jge
+
+# TODO: Could make the Template Assembly a list of things with differing register/immediate sizes, but that's too low ROI for now, better to move on to more material
+# List of tuples is in the form [ ( "Template Assembly", [ "List of equivalent", "jump mnemonics" ]), ("", ["",""]), (...) ]
+falseTemplateTuplesList = [
+                          ### jg/jnle/jnl/jge == false. Negative values < negative values
+                          ('mov {rX}, 0x{ltsi32:08X} \n sub {rX}, 0x{si32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{ltsi32:08X} was chosen to be negative and less than 0x{si32:08X} which was also chosen to be negative. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So since by choice here 0x{ltsi32:08X} < 0x{si32:08X} this jump will never be taken."),
+                          ### jg/jnle/jnl/jge == false. Negative values < than positive values
+                          ('mov {rX}, 0x{si32:08X} \n sub {rX}, 0x{nznsi32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{si32:08X} was chosen to be negative, and 0x{nznsi32:08X} was chosen to be positive. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So a negative value will never be 'greater-than' or 'not less-than or equal' to a positive value. So this jump will never be taken."),
+                          ### jg/jnle/jnl/jge == false. Positive values < than positive values
+                          ('mov {rX}, 0x{ltnznsi32:08X} \n sub {rX}, 0x{nznsi32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{ltnzi32:08X} was chosen to be positive and less than 0x{nznsi32:08X} which was also chosen to be positive. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So since by choice here 0x{ltnznsi32:08X} < 0x{nznsi32:08X} this jump will never be taken."),
+                          
+                          ### jng/jle/jl/jnge == false. Positive values > positive values
+                          ('mov {rX}, 0x{nznsi32:08X} \n cmp {rX}, 0x{ltnznsi32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{ltnznsi32:08X} was chosen to be positive and less than 0x{nznsi32:08X} which was also chosen to be positive. So since by choice here 0x{nznsi32:08X} > 0x{ltnznsi32:08X} this jump will never be taken."),
+                          ### jng/jle/jl/jnge == false. Positive values > negative values
+                          ('mov {rX}, 0x{nsi32:08X} \n cmp {rX}, 0x{si32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{nsi32:08X} was chosen to be positive and 0x{si32:08X} was chosen to be negative. So since by choice here 0x{nsi32:08X} > 0x{si32:08X} this jump will never be taken."),
+                          ### jng/jle/jl/jnge == false. Negative values > negative values
+                          ('mov {rX}, 0x{si32:08X} \n cmp {rX}, 0x{ltsi32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{ltsi32:08X} was chosen to be negative and less than 0x{si32:08X} which was also chosen to be negative. So since by choice here 0x{si32:08X} > 0x{ltsi32:08X} this jump will never be taken."),
+                          
+                          ### jl/jg/jnz/jne == false. Positive values == positive values
+                          ('mov {rX}, 0x{nznsi32:08X} \n cmp {rX}, 0x{nznsi32:08X}',
+                          ['jl SomeAddress', 'jg SomeAddress', 'jnz SomeAddress', 'jne SomeAddress'],
+                          "This is comparing a positive value against itself. So the zero flag will always be set, and this jump will never be taken. A thing can never be less than or greater than itself."),
+                          ### jl/jg/jnz/jne == false. Negative values == negative values
+                          ('mov {rX}, 0x{nznsi32:08X} \n cmp {rX}, 0x{nznsi32:08X}',
+                          ['jl SomeAddress', 'jg SomeAddress', 'jnz SomeAddress', 'jne SomeAddress'],
+                          "This is comparing a negative value against itself. So the zero flag will always be set, and this jump will never be taken. A thing can never be less than or greater than itself."),
+                                                    
+                          ]
+# List of tuples is in the form [ ( "Template Assembly", [ "List of equivalent", "jump mnemonics" ]), ("", ["",""]), (...) ]
+trueTemplateTuplesList = [
+                         ### jg/jnle/jnl/jge == true. Negative values > negative values
+                          ('mov {rX}, 0x{si32:08X} \n sub {rX}, 0x{ltsi32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{ltsi32:08X} was chosen to be negative and less than 0x{si32:08X} which was also chosen to be negative. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So since by choice here 0x{si32:08X} > 0x{ltsi32:08X} this jump will always be taken."),
+                          ### jg/jnle/jnl/jge == true. Positive values > negative values
+                          ('mov {rX}, 0x{nznsi32:08X} \n sub {rX}, 0x{si32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{si32:08X} was chosen to be negative, and 0x{nznsi32:08X} was chosen to be positive. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So a positive value will always be 'greater-than' or 'not less-than or equal' to a negative value. So this jump will always be taken."),
+                          ### jg/jnle/jnl/jge == true. Positive values > positive values
+                          ('mov {rX}, 0x{nznsi32:08X} \n sub {rX}, 0x{ltnznsi32:08X}',
+                          ['jg SomeAddress', 'jnle SomeAddress', 'jnl SomeAddress', 'jge SomeAddress'],
+                          "0x{nznsi32:08X} was chosen to be positive and greater than 0x{ltnznsi32:08X} which was also chosen to be positive. Because CMP acts like a SUB, you can use the same heuristics for placing the operation between the operands. Just in this case since it's signed conditional check, you need to interpret the operands as signed values. So since by choice here 0x{nznsi32:08X} > 0x{ltnznsi32:08X} this jump will always be taken."),
+                                                    
+                          ### jng/jle/jl/jnge == true. Positive values < positive values
+                          ('mov {rX}, 0x{ltnznsi32:08X} \n cmp {rX}, 0x{nznsi32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{ltnzi32:08X} was chosen to be positive and less than 0x{nznsi32:08X} which was also chosen to be positive. So since by choice here 0x{ltnznsi32:08X} < 0x{nznsi32:08X} this jump will always be taken."),
+                          ### jng/jle/jl/jnge == true. Negative values < positive values
+                          ('mov {rX}, 0x{si32:08X} \n cmp {rX}, 0x{nznsi32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{nznsi32:08X} was chosen to be positive and 0x{si32:08X} was chosen to be negative. So since by choice here 0x{si32:08X} < 0x{nznsi32:08X} this jump will always be taken."),
+                          ### jng/jle/jl/jnge == true. Negative values < negative values
+                          ('mov {rX}, 0x{ltsi32:08X} \n cmp {rX}, 0x{si32:08X}',
+                          ['jng SomeAddress', 'jle SomeAddress', 'jl SomeAddress', 'jnge SomeAddress'],
+                          "0x{ltsi32:08X} was chosen to be negative and less than 0x{si32:08X} which was also chosen to be negative. So since by choice here  0x{ltsi32:08X} < 0x{si32:08X} this jump will always be taken."),
+                          
+                          ### jle/jge/jz/je == true. Positive values == positive values
+                          ('mov {rX}, 0x{nsi32:08X} \n cmp {rX}, 0x{nsi32:08X}',
+                          ['jle SomeAddress', 'jge SomeAddress', 'jz SomeAddress', 'je SomeAddress'],
+                          "This is comparing a positive value against itself. So the zero flag will always be set, and this jump will always be taken."),
+                          ### jnle/jle/jnge/jge/jz/je == true. Negative values == negative values
+                          ('mov {rX}, 0x{nznsi32:08X} \n cmp {rX}, 0x{nznsi32:08X}',
+                          ['jle SomeAddress', 'jge SomeAddress', 'jz SomeAddress', 'je SomeAddress'],
+                          "This is comparing a negative value against itself. So the zero flag will always be set, and this jump will always be taken."),                          
+                         ]
+
+gTFLists = [falseTemplateTuplesList, trueTemplateTuplesList]
+
+def randomAsmString():
+    global gAnswer, gTemplateIndex, gDict, gTFList, gMnemonic
+    
+    # Initialize all immediates
+    i8 = random.randint(0, (2**8)-1)
+    ni8 = (-i8) % (2**8)
+    nzi8 = random.randint(1, (2**8)-1)
+    ltnzi8 = random.randint(0, nzi8-1)
+    si8 = random.randint((2**7), (2**8)-1)
+    nsi8 = random.randint(0, (2**7)-1)
+    #print(f"i8={i8:02X}, ni8={ni8:02X}, nzi8={nzi8:02X}, ltnzi8={ltnzi8:02X}, si8={si8:02X}, nsi8={nsi8:02X}")
+    
+    i16 = random.randint(0, (2**16)-1)
+    ni16 = (-i16) % (2**16)
+    nzi16 = random.randint(1, (2**16)-1)
+    ltnzi16 = random.randint(0, nzi16-1)
+    si16 = random.randint((2**15), (2**16)-1)
+    nsi16 = random.randint(0, (2**15)-1)
+    #print(f"i16={i16:04X}, ni16={ni16:04X}, nzi16={nzi16:04X}, ltnzi16={ltnzi16:04X}, si16={si16:04X}, nsi16={nsi16:04X}")
+    
+    i32 = random.randint(0, (2**32)-1)
+    ni32 = (-i32) % (2**32)
+    nzi32 = random.randint(1, (2**32)-1)
+    ltnzi32 = random.randint(0, nzi32-1)
+    si32 = random.randint((2**31)+1, (2**32)-1)
+    ltsi32 = random.randint((2**31), si32-1)
+    nsi32 = random.randint(0, (2**31)-1)
+    nznsi32 = random.randint(1, (2**31)-1)
+    ltnznsi32 = random.randint(0, nznsi32-1)
+    #print(f"i32={i32:08X}, ni32={ni32:08X}, nzi32={nzi32:08X}, ltnzi32={ltnzi32:08X}, si32={si32:08X}, nsi32={nsi32:08X}, nznsi32={nznsi32:08X}, ltnznsi32={ltnznsi32:08X},")
+    
+    i64 = random.randint(0, (2**64)-1)
+    ni64 = (-i64) % (2**64)
+    i64_2 = random.randint(0, (2**64)-1)
+    nzi64 = random.randint(1, (2**64)-1)
+    ltnzi64 = random.randint(0, nzi64-1)
+    si64 = random.randint((2**63)+1, (2**64)-1)
+    ltsi64 = random.randint((2**63), si64-1)
+    nsi64 = random.randint(0, (2**63)-1)
+    nznsi64 = random.randint(1, (2**63)-1)
+    ltnznsi64 = random.randint(0, nznsi64-1)
+    #print(f"i64={i64:016X}, ni64={ni64:016X}, nzi64={nzi64:016X}, ltnzi64={ltnzi64:016X}, si64={si64:016X}, nsi64={nsi64:016X}, nznsi64={nznsi64:016X}, ltnznsi64={ltnznsi64:016X}")
+   
+    # Force the registers to be different sizes from the same 3 registers
+    randRegIndex1 = random.randint(0, len(gRegs64)-1)
+    randRegIndex2 = random.randint(0, len(gRegs64)-1)
+    while(randRegIndex1 == randRegIndex2): # Make sure it doesn't overlap
+        randRegIndex2 = random.randint(0, len(gRegs64)-1)
+    randRegIndex3 = random.randint(0, len(gRegs64)-1)
+    while(randRegIndex3 == randRegIndex1 or randRegIndex3 == randRegIndex2): # Make sure it doesn't overlap
+        randRegIndex3 = random.randint(0, len(gRegs64)-1)
+    rX = gRegs64[randRegIndex1]
+    rY = gRegs64[randRegIndex2]
+    rZ = gRegs64[randRegIndex3]
+    rX32 = gRegs32[randRegIndex1]
+    rY32 = gRegs32[randRegIndex2]
+    rZ32 = gRegs32[randRegIndex3]
+    rX16 = gRegs16[randRegIndex1]
+    rY16 = gRegs16[randRegIndex2]
+    rZ16 = gRegs16[randRegIndex3]
+    rX8 = gRegs8[randRegIndex1]
+    rY8 = gRegs8[randRegIndex2]
+    rZ8 = gRegs8[randRegIndex3]
+
+    # Fill in the dictionary with all variable names, so the string interpolation 
+    # w/ .format() below will automatically handle it for us
+    gDict = {'rX':rX,
+         'rY':rY,
+         'rZ':rZ,
+         'rX32':rX32,
+         'rY32':rY32,
+         'rZ32':rZ32,
+         'rX16':rX16,
+         'rY16':rY16,
+         'rZ16':rZ16,
+         'rX8':rX8,
+         'rY8':rY8,
+         'rZ8':rZ8,
+         'i8':i8,
+         'ni8':ni8,
+         'nzi8':nzi8,
+         'ltnzi8':ltnzi8,
+         'si8':si8,
+         'nsi8':nsi8,
+         'i16':i16,
+         'ni16':ni16,
+         'nzi16':nzi16,
+         'ltnzi16':ltnzi16,
+         'si16':si16,
+         'nsi16':nsi16,
+         'i32':i32,
+         'ni32':ni32,
+         'nzi32':nzi32,
+         'ltnzi32':ltnzi32,
+         'si32':si32,
+         'nsi32':nsi32,
+         'si32':si32,
+         'ltsi32':ltsi32,
+         'nsi32':nsi32,
+         'nznsi32':nznsi32,
+         'ltnznsi32':ltnznsi32,
+         'i64':i64,
+         'i64_2':i64_2,
+         'nzi64':nzi64,
+         'ltnzi64':ltnzi64,
+         'si64':si64,
+         'ltsi64':ltsi64,
+         'nsi64':nsi64,
+         'nznsi64':nznsi64,
+         'ltnznsi64':ltnznsi64,
+         }
+    #print(gDict)
+    
+    # Pick whether the answer will be true or false
+    gAnswer = random.randint(0, 1)
+    
+    # Select the tuple list based on that
+    gTFList = gTFLists[gAnswer]
+    # gTFList now either points at falseTemplateTuplesList or trueTemplateTuplesList 
+    
+    #Select a tuple out of that list
+    gTemplateIndex = random.randint(0, len(gTFList)-1)
+    #print(gTemplateIndex)
+    templateAsm = gTFList[gTemplateIndex][0]
+    #print(templateAsm)
+    
+    #Pick an equivalent jump mnemonic at random
+    gMnemonic = random.choices(gTFList[gTemplateIndex][1])
+    #print(gMnemonic)
+    
+    #interpolate the template asm register/immediate fields from the dictionary
+    str = (templateAsm).format(**gDict)
+    # Fix Brython TagSum/string concatenation error
+    # Error: TypeError: unsupported operand type(s) for +: 'str' and 'TagSum'
+    # By Leandro Cañellas
+    # 2026-05-17
+    htmlString = html.SPAN()
+    stringList = str.split('\n')
+    for string in stringList:
+        htmlString += string + html.BR()
+    htmlString += gMnemonic + html.BR()
+    htmlString += html.P() + "Will the jump be taken?" \
+                + html.P() + "Enter 1 for true, or 0 for false." \
+                + html.BR() + "You shouldn't need a calculator for this round."
+    return htmlString
+
+def createCorrectAnswerString():
+    global gAnswer, gTemplateIndex, gTFList, gDict, gMnemonic
+    
+    #interpolate the fields from the dictionary
+    explanationStr = (gTFList[gTemplateIndex][2]).format(**gDict)
+    asmStr = (gTFList[gTemplateIndex][0]).format(**gDict)
+    htmlString = "For the previous question's assembly:" + html.P()
+    stringList = asmStr.split('\n')
+    for string in stringList:
+        htmlString += string + html.BR()
+    htmlString += gMnemonic + html.BR()
+    #print((gTFList[gTemplateIndex][2]))
+    #print(gDict[(gTFList[gTemplateIndex][2])])
+    htmlString += html.P() + "The correct boolean for whether the jump would be taken or not was: {} ".format(gAnswer) \
+                + html.P() + "This assembly was randomly picked from a set of instructions which are always guaranteed to be {}".format("true" if(gAnswer) else "false") \
+                + html.P() + explanationStr \
+                + html.P() + "If you think this question was buggy, post all the content in this box to a forum question"
+    return htmlString
+
+def drawAsm():
+    stack = html.TABLE()
+    stack <= (html.TR(html.TH(html.DIV(html.B(randomAsmString()), id="randAsm"))))
+    document["topzone"].clear()
+    document["topzone"] <= stack
+
+def drawStatus():
+    initialStatus = html.TABLE()
+    initialStatus <= html.TR(html.DIV("CurrentScore = 0", id="theirScore"), colspan=3)
+    initialStatus <= html.TR(html.DIV("No answers yet...", id="theirResult"), colspan=3)
+    document <= initialStatus
+
+def levelComplete():
+    document.clear()
+    document <= html.IMG(src="https://ost2images.s3.amazonaws.com/Arch101_x86-64_Asm/r0x0r_arcade/Level3CompleteDone.png", height=200)
+
+def reaction(event):
+    # Only continue if they pressed enter
+    if(event.type == "keyup" and event.keyCode != 13):
+        return
+    global currentScore
+    theirResult = document["theirResult"]
+    theirScore = document["theirScore"]
+
+    roundExitGoal = 1000
+    increment = 100
+    bonus = 0
+    input = document["input16"].value.lower().strip() # force to lowercase for comparisons, and remove extra whitespace
+    if(input == ""):
+        print("Skipping empty input, so as not to penalize you ;)");
+        return
+    # Normalize the input to account for being submitted with or without the 0x
+    try:
+        inputDec = int(input, 16)
+    except:
+        inputDec = gAnswer-1 # If they entered an invalid string, set it to a guaranteed-wrong answer and continue
+    #print(f"input = {inputDec}, gAnswer = {gAnswer}")
+
+    # Clear out leftover text from the input box
+    document["input16"].value = ""
+    if(inputDec == gAnswer):
+        theirResult.text = "Correct! +{} points! :D".format(increment)
+        currentScore += increment
+        theirScore.text = "CurrentScore = " + str(currentScore) + ". Just {} left to go!".format(roundExitGoal-currentScore)
+        if(currentScore >= roundExitGoal):
+            levelComplete()
+        else:
+            drawAsm()
+    else:
+        # Generate a description of how to arrive at the correct result
+        correctResult = html.TABLE()
+        correctResult <= (html.TR(html.DIV(html.B("Incorrect! -{} points! :'(".format(2*increment)), id="pointLoss"))) + html.P()
+        correctResult <= (html.TR(html.DIV(html.B("You entered: {} ".format(input)), id="theirAnswer"))) + html.P()
+        correctResult <= (html.TR(html.DIV(html.B(createCorrectAnswerString()), id="prevAsm")))
+        theirResult.clear()
+        theirResult <= correctResult
+
+        # Update the score
+        currentScore -= 2*increment
+        theirScore.text = "CurrentScore = " + str(currentScore) + ". Just {} left to go!".format(roundExitGoal-currentScore)
+        drawAsm()
+
+document["button16"].bind("click", reaction)
+document["input16"].bind("keyup", reaction) # Allow users to hit enter instead of clicking the button
+
+drawAsm()
+drawStatus()
+
+
+
+</script>
+<p id='bottomzone'> </p>
+<div class="example" id="ex16">
+    <p><input id="input16" autocomplete="off" value="">
+    <button id="button16">Submit answer</button>
+    <p><div id="zone16" class="zone"></div>
+</div>
+
+</body>
+
+</html>
