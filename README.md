@@ -13,4 +13,4 @@ Fixed bugged games on the OST2.FYI platform
 
 ### Boolean Logic
 
-- [evel 1](https://github.com/leandroccdev/OST2.FYI-fixed-games/blob/main/Architecture-1001%3Ax86-64-assembly/Boolean-Logic/RoX0r-Arcade/level-1.html)
+- [Level 1](https://github.com/leandroccdev/OST2.FYI-fixed-games/blob/main/Architecture-1001%3Ax86-64-assembly/Boolean-Logic/RoX0r-Arcade/level-1.html)
